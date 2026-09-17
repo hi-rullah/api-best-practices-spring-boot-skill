@@ -157,6 +157,30 @@ public ResponseEntity<Page<UserSummaryResponse>> getUsers(
 }
 ```
 
+**Pagination with a JPA one-to-many collection**: never combine `Pageable` with a `JOIN FETCH` on a `@OneToMany`/`@ManyToMany` collection. Hibernate can't paginate in SQL across a collection join, so it silently loads *all* matching rows into memory and paginates in the application layer — the opposite of what pagination is for. Two mistakes to avoid:
+
+1. Lazy-loading the child collection per row → N+1 queries.
+2. `JOIN FETCH` + `Pageable` together → in-memory pagination.
+
+Fix with a two-query pattern: paginate parent IDs first (no join, so SQL-level pagination works), then fetch full entities with their collections for just that page's IDs.
+
+```java
+// 1. Paginate IDs only
+@Query("select p.id from Post p order by p.id")
+Page<Long> findPostIds(Pageable pageable);
+
+// 2. Fetch entities + collections for that page's IDs
+@Query("select distinct p from Post p left join fetch p.comments where p.id in :ids")
+List<Post> findAllByIdInWithComments(@Param("ids") Collection<Long> ids);
+```
+
+Also set, so the anti-pattern fails loudly instead of degrading silently:
+
+```properties
+spring.jpa.open-in-view=false
+spring.jpa.properties.hibernate.query.fail_on_pagination_over_collection_fetch=true
+```
+
 ## 7. Global exception handling
 
 All error responses come from one `@RestControllerAdvice` class (prefer it over `@ControllerAdvice` — it implies `@ResponseBody`). Controllers and services never build error `ResponseEntity`s inline; they throw domain exceptions.
@@ -398,6 +422,7 @@ Before declaring any endpoint work complete, verify all of these. When reviewing
 - [ ] Every request body DTO has Bean Validation annotations and `@Valid`
 - [ ] Controller has no business logic or repository access; constructor injection only
 - [ ] Every list endpoint is paginated with an enforced max page size
+- [ ] No `Pageable` combined with `JOIN FETCH` on a collection — use the ID-then-fetch pattern instead
 - [ ] Errors flow through `@RestControllerAdvice` with the shared `ErrorResponse` shape
 - [ ] No stack traces, entity internals, or credentials in responses or logs
 - [ ] Base path is versioned (`/api/v1/...`)
